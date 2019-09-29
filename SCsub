@@ -1,0 +1,64 @@
+Import('env')
+
+target_name = 'gameplay_abilities'
+module_root = '#modules/gameplay_abilities/'
+include_dirs = [module_root, '#thirdparty/catch2']
+
+includes = [
+    module_root + 'register_types.h',
+    module_root + 'gameplay_ability_system.h',
+    module_root + 'gameplay_ability.h',
+    module_root + 'gameplay_api.h',
+    module_root + 'gameplay_attribute.h',
+    module_root + 'gameplay_effect_magnitude.h',
+    module_root + 'gameplay_effect.h',
+    module_root + 'gameplay_node.h',
+    module_root + 'gameplay_tags.h',
+    module_root + 'gameplay_test.h'
+]
+
+sources = [
+    module_root + 'register_types.cpp',
+    module_root + 'gameplay_ability_system.cpp',
+    module_root + 'gameplay_ability.cpp',
+    module_root + 'gameplay_attribute.cpp',
+    module_root + 'gameplay_effect_magnitude.cpp',
+    module_root + 'gameplay_effect.cpp',
+    module_root + 'gameplay_node.cpp',
+    module_root + 'gameplay_tags.cpp',
+    module_root + 'gameplay_test.cpp'
+]
+
+def remove_hash(a):
+    r = []
+    for e in a:
+        r.append(e.replace('#', ''))
+    return r
+
+# First, create a custom env for the shared library.
+module_env = env.Clone()
+# We don't want godot's dependencies to be injected into our shared library.
+module_env.Append(CPPPATH=include_dirs)
+module_env['LIBS'] = []
+
+# Now define the shared library. Note that by default it would be built
+# into the module's folder, however it's better to output it into `bin`
+# next to the Godot binary.
+library = module_env.Library(target=module_root + target_name, source=sources)
+
+if env['platform'] != 'windows':
+    library_shim = library[0].name.rsplit('.', 1)[0]
+    env.Append(LIBS=[library_shim])
+else:
+    env.Append(LIBS=[target_name])
+    # Add sources to Visual Studio
+    if env['vsproj']:
+        env.Append(CPPPATH=remove_hash(include_dirs))
+        env.vs_incs += remove_hash(includes)
+        env.vs_srcs += remove_hash(sources)
+        # Even though catch is in the third party directory, add it here
+        # since I don't want to change core files too much.
+        env.vs_incs += ['thirdparty/catch2/catch.hpp']
+
+# Add library path to environment so that static library is found.
+env.Append(LIBPATH=[module_root])
