@@ -12,7 +12,6 @@
 
 void register_gameplay_abilities_types() {
 	/** Nodes */
-	ClassDB::register_class<GameplayAttributeInitialiser>();
 	ClassDB::register_class<GameplayAbilitySystem>();
 	ClassDB::register_class<GameplayEffectNode>();
 	ClassDB::register_class<GameplayAbility>();

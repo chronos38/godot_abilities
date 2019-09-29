@@ -1725,9 +1725,6 @@ SCENARIO("stack aggregation", "[stacking]") {
 namespace TestGameplayAbilities {
 MainLoop *test() {
 	try {
-		//const char* argv[] = { "" };
-		//const auto argc = sizeof(argv) / sizeof(char*);
-		//Catch::Session().run(argc, argv);
 		Catch::Session().run();
 	} catch (std::exception &e) {
 		OS::get_singleton()->printerr("%s\n", e.what());

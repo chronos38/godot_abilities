@@ -925,8 +925,6 @@ void GameplayAbilitySystem::execute_effect(GameplayEffectNode *node) {
 			ability->cancel_ability();
 		}
 	}
-
-	// GA-TODO: Check stack and cue handling from custom execution.
 }
 
 void GameplayAbilitySystem::apply_modifiers(GameplayEffectNode *node, const Array &modifiers) {

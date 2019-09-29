@@ -78,37 +78,3 @@ private:
 
 	static void _bind_methods();
 };
-
-class GAMEPLAY_ABILITIES_API GameplayAttributeInitialiser : public GameplayNode {
-	GDCLASS(GameplayAttributeInitialiser, GameplayNode);
-	OBJ_CATEGORY("GameplayAbilities");
-
-public:
-	virtual ~GameplayAttributeInitialiser() = default;
-
-	virtual void load(const Variant &args = {});
-
-	void initialise_attribute_set(Ref<GameplayAttributeSet> attribute_set, int64_t level) const;
-	void update_attribute_set(Ref<GameplayAttributeSet> attribute_set, int64_t level) const;
-	void clear_attribute_set(Ref<GameplayAttributeSet> attribute_set) const;
-	void set_attribute_default_value(Ref<GameplayAttribute> attribute, const StringName &set_name, int64_t level) const;
-	int64_t get_maximum_level() const;
-
-protected:
-	void add_attribute(const StringName &attribute_set, const StringName &attribute, int64_t level, double value);
-	void update_attribute(const StringName &attribute_set, const StringName &attribute, int64_t level, double value);
-	void remove_attribute(const StringName &attribute_set, const StringName &attribute, int64_t level = 0);
-
-private:
-	struct AttributeLevelData {
-		StringName attribute;
-		PoolRealArray values;
-	};
-
-	using AttributeSetData = Vector<AttributeLevelData>;
-	using AttributeTable = HashMap<StringName, AttributeSetData>;
-	AttributeTable attribute_table;
-	int64_t maximum_level = 0;
-
-	static void _bind_methods();
-};
