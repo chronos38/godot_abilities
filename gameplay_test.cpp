@@ -1100,6 +1100,7 @@ SCENARIO("check if effects with removal tags get removed") {
 			effect->get_target_tags()->append("test.target1");
 			effect->get_effect_tags()->append("test.effect");
 		}));
+		scene_tree->idle(delta);
 
 		// Query tags
 		auto query_tags = make_reference<GameplayTagContainer>([](Ref<GameplayTagContainer> tags) {

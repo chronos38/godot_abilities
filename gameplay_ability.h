@@ -12,20 +12,6 @@ class GameplayEffect;
 class GameplayEvent;
 class InputEvent;
 
-/** How ability gets executed over network. */
-namespace NetworkExecution {
-enum Type {
-	/** Ability will run locally only. */
-	LocalOnly,
-	/** Ability is initiated by server but will run locally. */
-	ServerInitiated,
-	/** Ability runs only on server. */
-	ServerOnly
-};
-}
-
-VARIANT_ENUM_CAST(NetworkExecution::Type);
-
 /** What will trigger this ability. */
 namespace AbilityTrigger {
 enum Type {
@@ -179,8 +165,6 @@ public:
 
 	void set_ability_name(const StringName &value);
 	StringName get_ability_name() const;
-	void set_network_execution(NetworkExecution::Type value);
-	NetworkExecution::Type get_network_execution() const;
 	void set_triggers(const Array &value);
 	const Array &get_triggers() const;
 	void set_cooldown_effect(const Ref<GameplayEffect> &value);
@@ -259,8 +243,6 @@ private:
 	/** Ability name to distinguish from other abilities. */
 	StringName ability_name;
 
-	/** Defines how this ability shall be executed. */
-	NetworkExecution::Type network_execution = NetworkExecution::ServerOnly;
 	/** Defines how this ability shall be triggered. */
 	ArrayContainer<GameplayAbilityTriggerData> triggers;
 	/** Effect for cooldown evaluation. */

@@ -335,14 +335,6 @@ StringName GameplayAbility::get_ability_name() const {
 	return ability_name;
 }
 
-void GameplayAbility::set_network_execution(NetworkExecution::Type value) {
-	network_execution = value;
-}
-
-NetworkExecution::Type GameplayAbility::get_network_execution() const {
-	return network_execution;
-}
-
 void GameplayAbility::set_triggers(const Array &value) {
 	triggers = value;
 }

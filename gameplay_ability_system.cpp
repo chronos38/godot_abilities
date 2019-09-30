@@ -675,54 +675,30 @@ void GameplayAbilitySystem::remove_abilities(const Array &abilities) {
 }
 
 void GameplayAbilitySystem::activate_ability(Node *node) {
-	if (get_multiplayer().is_null() || !get_multiplayer()->has_network_peer()) {
-		// If there is no multiplayer then we assume a single player game.
-		internal_activate_ability(node);
-	} else if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
-		switch (ability->get_network_execution()) {
-			case NetworkExecution::LocalOnly: {
-				// Execute locally only, this my only be useful for single player games.
-				internal_activate_ability(ability);
-			} break;
-			case NetworkExecution::ServerInitiated: {
-				// Server checks infliction and then triggers execution on clients.
-				rpc("server_activate_ability", ability->get_path());
-			} break;
-			case NetworkExecution::ServerOnly: {
-				// Easiest one, server handles execution and distributes state.
-				rpc("server_activate_ability", ability->get_path());
-			} break;
-			default: {
-				ERR_EXPLAIN("Received invalid network execution.");
-				ERR_FAIL();
-			} break;
+	if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
+		if (ability->can_activate_ability()) {
+			auto &&cancel_tags = ability->get_cancel_ability_tags();
+
+			for (auto active_ability : active_abilities) {
+				auto &&active_tags = active_ability->get_ability_tags();
+				if (active_tags->has_any(cancel_tags)) {
+					cancel_ability(active_ability);
+				}
+			}
+
+			ability->targets = targets;
+			ability->activate_ability();
+			emit_signal(gameplay_ability_activated, this, ability);
+		} else {
+			emit_signal(gameplay_ability_blocked, this, ability);
 		}
 	}
 }
 
 void GameplayAbilitySystem::cancel_ability(Node *node) {
-	if (get_multiplayer().is_null() || !get_multiplayer()->has_network_peer()) {
-		// If there is no multiplayer then we assume a single player game.
-		internal_cancel_ability(node);
-	} else if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
-		switch (ability->get_network_execution()) {
-			case NetworkExecution::LocalOnly: {
-				// Execute locally only, this my only be useful for single player games.
-				internal_cancel_ability(ability);
-			} break;
-			case NetworkExecution::ServerInitiated: {
-				// Server checks infliction and then triggers execution on clients.
-				rpc("server_cancel_ability", ability->get_path());
-			} break;
-			case NetworkExecution::ServerOnly: {
-				// Easiest one, server handles execution and distributes state.
-				rpc("server_cancel_ability", ability->get_path());
-			} break;
-			default: {
-				ERR_EXPLAIN("Received invalid network execution.");
-				ERR_FAIL();
-			} break;
-		}
+	if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
+		ability->cancel_ability();
+		emit_signal(gameplay_ability_cancelled, this, ability);
 	}
 }
 
@@ -784,12 +760,56 @@ bool GameplayAbilitySystem::try_apply_effect(Node *source, const Ref<GameplayEff
 	return false;
 }
 
-void GameplayAbilitySystem::apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks /*= 1*/, int64_t level /*= 1*/, double normalised_level /*= 1*/) {
-	ERR_FAIL_COND(effect.is_null());
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer()) {
-		rpc("server_apply_effect", source->get_path(), effect, stacks, level, normalised_level);
-	} else {
-		internal_apply_effect(source, effect, stacks, level, normalised_level);
+void GameplayAbilitySystem::apply_effect(Node *node, const Ref<GameplayEffect> &effect, int64_t stacks /*= 1*/, int64_t level /*= 1*/, double normalised_level /*= 1*/) {
+	if (auto source = dynamic_cast<GameplayAbilitySystem *>(node)) {
+		if (can_apply_effect(source, effect, stacks, level, normalised_level)) {
+			if (effect->get_infliction_chance().is_valid() && rgenerator(rengine) > effect->get_infliction_chance()->calculate_magnitude(source, this, effect, level, normalised_level)) {
+				emit_signal(gameplay_effect_infliction_failed, this, effect);
+			} else {
+				GameplayAbilitySystem *aggregate_source = nullptr;
+
+				switch (effect->get_stacking_type()) {
+					case StackingType::AggregateOnSource: {
+						aggregate_source = source;
+					} break;
+					case StackingType::AggregateOnTarget: {
+						aggregate_source = this;
+					} break;
+					default: {
+					} break;
+				}
+
+				if (aggregate_source) {
+					auto effect_name = effect->get_effect_name();
+					auto &&stacking = aggregate_source->effect_stacking;
+
+					if (stacking.has(effect_name)) {
+						auto &&effect_data = stacking[effect_name];
+
+						if (effect_data.level == level) {
+							auto effect_node = stacking[effect_name].effect_node;
+							effect_node->add_stack(stacks);
+
+							for (auto ability : active_abilities) {
+								ability->process_wait(WaitType::EffectStackAdded, effect_node);
+							}
+						} else if (effect_data.level < level) {
+							auto effect_node = stacking[effect_name].effect_node;
+							active_effects.erase(effect_node);
+							stacking.erase(effect_name);
+							effect_node->queue_delete();
+							add_effect(source, effect, stacks, level, normalised_level);
+						} else {
+							emit_signal(gameplay_effect_infliction_failed, this, effect);
+						}
+					} else {
+						add_effect(source, effect, stacks, level, normalised_level);
+					}
+				} else {
+					add_effect(source, effect, stacks, level, normalised_level);
+				}
+			}
+		}
 	}
 }
 
@@ -799,38 +819,89 @@ void GameplayAbilitySystem::apply_effects(Node *source, const Array &effects, in
 	}
 }
 
-void GameplayAbilitySystem::remove_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks /*= 1*/, int64_t level /*= 1*/) {
-	ERR_FAIL_COND(effect.is_null());
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer()) {
-		rpc("server_remove_effect", source->get_path(), effect, stacks, level);
-	} else {
-		internal_remove_effect(source, effect, stacks, level);
+void GameplayAbilitySystem::remove_effect(Node *node, const Ref<GameplayEffect> &effect, int64_t stacks /*= 1*/, int64_t level /*= 1*/) {
+	if (auto source = dynamic_cast<GameplayAbilitySystem *>(node)) {
+		GameplayAbilitySystem *aggregate_source = nullptr;
+
+		switch (effect->get_stacking_type()) {
+			case StackingType::AggregateOnSource: {
+				aggregate_source = source;
+			} break;
+			case StackingType::AggregateOnTarget: {
+				aggregate_source = this;
+			} break;
+			default: {
+				for (auto effect_node : active_effects) {
+					if (effect_node->get_effect()->get_effect_name() == effect->get_effect_name()) {
+						active_effects.erase(effect_node);
+						effect_node->queue_delete();
+
+						for (auto ability : active_abilities) {
+							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
+							ability->process_wait(WaitType::EffectRemoved, effect_node);
+						}
+					}
+				}
+
+				return;
+			} break;
+		}
+
+		if (aggregate_source) {
+			auto effect_name = effect->get_effect_name();
+			auto &&stacking = aggregate_source->effect_stacking;
+
+			if (stacking.has(effect_name)) {
+				auto &&effect_data = stacking[effect_name];
+				auto effect_node = effect_data.effect_node;
+
+				if (effect_data.level > level) {
+					emit_signal(gameplay_effect_removal_failed, this, effect);
+				} else {
+					effect_node->remove_stack(stacks);
+
+					if (effect_node->get_stacks() <= 0) {
+						for (auto ability : active_abilities) {
+							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
+							ability->process_wait(WaitType::EffectRemoved, effect_node);
+						}
+					} else {
+						for (auto ability : active_abilities) {
+							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
-void GameplayAbilitySystem::remove_effect_node(Node *source, Node *effect_node, int64_t stacks /*= 1*/, int64_t level /*= 1*/) {
-	ERR_FAIL_COND(effect_node == nullptr);
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer()) {
-		rpc("server_remove_effect", source->get_path(), effect_node, stacks, level);
-	} else {
-		internal_remove_effect_node(source, effect_node, stacks, level);
+void GameplayAbilitySystem::remove_effect_node(Node *, Node *node, int64_t stacks /*= 1*/, int64_t level /*= 1*/) {
+	if (auto effect_node = dynamic_cast<GameplayEffectNode *>(node)) {
+		auto &&effect = effect_node->get_effect();
+
+		if (effect_node->get_level() > level) {
+			emit_signal(gameplay_effect_removal_failed, this, effect);
+		} else {
+			effect_node->remove_stack(stacks);
+
+			for (auto ability : active_abilities) {
+				ability->process_wait(WaitType::EffectRemoved, effect);
+			}
+		}
 	}
 }
 
 void GameplayAbilitySystem::apply_cue(const String &cue, double level /*= 1*/, double magnitude /*= 0*/, bool persistent /*= false*/) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer()) {
-		rpc("sync_apply_cue", cue, level, magnitude, persistent);
-	} else {
-		sync_apply_cue(cue, level, magnitude, persistent);
+	if (persistent) {
+		persistent_cues->append(cue);
 	}
+	emit_signal(gameplay_cue_activated, this, cue, level, magnitude, persistent);
 }
 
 void GameplayAbilitySystem::remove_cue(const String &cue) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer()) {
-		rpc("sync_remove_cue", cue);
-	} else {
-		sync_remove_cue(cue);
-	}
+	persistent_cues->remove(cue);
+	emit_signal(gameplay_cue_removed, this, cue);
 }
 
 int64_t GameplayAbilitySystem::get_stack_count(const Ref<GameplayEffect> &effect) const {
@@ -985,310 +1056,6 @@ void GameplayAbilitySystem::remove_active_ability(GameplayAbility *ability) {
 	}
 }
 
-void GameplayAbilitySystem::server_activate_ability(const NodePath &ability_path) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && !is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-
-	if (auto ability = dynamic_cast<GameplayAbility *>(get_node(ability_path))) {
-		switch (ability->get_network_execution()) {
-			case NetworkExecution::LocalOnly: {
-				// Do nothing.
-			} break;
-			case NetworkExecution::ServerInitiated: {
-				rpc("client_activate_ability", ability_path);
-			} break;
-			case NetworkExecution::ServerOnly: {
-				internal_activate_ability(ability);
-				replicate_attributes();
-			} break;
-			default: {
-			} break;
-		}
-	}
-}
-
-void GameplayAbilitySystem::client_activate_ability(const NodePath &ability_path) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_activate_ability(get_node(ability_path));
-}
-
-void GameplayAbilitySystem::internal_activate_ability(Node *node) {
-	if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
-		if (ability->can_activate_ability()) {
-			if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-				rpc("client_ability_activated", ability->get_path());
-			}
-
-			auto &&cancel_tags = ability->get_cancel_ability_tags();
-
-			for (auto active_ability : active_abilities) {
-				auto &&active_tags = active_ability->get_ability_tags();
-				if (active_tags->has_any(cancel_tags)) {
-					cancel_ability(active_ability);
-				}
-			}
-
-			ability->targets = targets;
-			ability->activate_ability();
-			emit_signal(gameplay_ability_activated, this, ability);
-		} else {
-			if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-				rpc("client_ability_blocked", ability);
-			}
-			emit_signal(gameplay_ability_blocked, this, ability);
-		}
-	}
-}
-
-void GameplayAbilitySystem::server_cancel_ability(const NodePath &ability_path) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && !is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_cancel_ability(get_node(ability_path));
-
-	if (auto ability = dynamic_cast<GameplayAbility *>(get_node(ability_path))) {
-		switch (ability->get_network_execution()) {
-			case NetworkExecution::LocalOnly: {
-				// Do nothing.
-			} break;
-			case NetworkExecution::ServerInitiated: {
-				rpc("client_cancel_ability");
-			} break;
-			case NetworkExecution::ServerOnly: {
-				internal_cancel_ability(ability);
-				replicate_attributes();
-			} break;
-			default: {
-			} break;
-		}
-	}
-}
-
-void GameplayAbilitySystem::client_cancel_ability(const NodePath &ability_path) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_cancel_ability(get_node(ability_path));
-}
-
-void GameplayAbilitySystem::internal_cancel_ability(Node *node) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		rpc("client_cancel_ability", node->get_path());
-	}
-
-	if (auto ability = dynamic_cast<GameplayAbility *>(node)) {
-		ability->cancel_ability();
-		emit_signal(gameplay_ability_cancelled, this, ability);
-	}
-}
-
-void GameplayAbilitySystem::server_apply_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && !is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_apply_effect(get_node(source_path), effect, stacks, level, normalised_level);
-	replicate_attributes();
-}
-
-void GameplayAbilitySystem::client_apply_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_apply_effect(get_node(source_path), effect, stacks, level, normalised_level);
-}
-
-void GameplayAbilitySystem::internal_apply_effect(Node *node, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level) {
-	if (auto source = dynamic_cast<GameplayAbilitySystem *>(node)) {
-		if (can_apply_effect(source, effect, stacks, level, normalised_level)) {
-			if (effect->get_infliction_chance().is_valid() && rgenerator(rengine) > effect->get_infliction_chance()->calculate_magnitude(source, this, effect, level, normalised_level)) {
-				if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-					rpc("client_infliction_failed", effect);
-				}
-				emit_signal(gameplay_effect_infliction_failed, this, effect);
-			} else {
-				GameplayAbilitySystem *aggregate_source = nullptr;
-
-				switch (effect->get_stacking_type()) {
-					case StackingType::AggregateOnSource: {
-						aggregate_source = source;
-					} break;
-					case StackingType::AggregateOnTarget: {
-						aggregate_source = this;
-					} break;
-					default: {
-					} break;
-				}
-
-				if (aggregate_source) {
-					auto effect_name = effect->get_effect_name();
-					auto &&stacking = aggregate_source->effect_stacking;
-
-					if (stacking.has(effect_name)) {
-						auto &&effect_data = stacking[effect_name];
-
-						if (effect_data.level == level) {
-							auto effect_node = stacking[effect_name].effect_node;
-							effect_node->add_stack(stacks);
-
-							for (auto ability : active_abilities) {
-								ability->process_wait(WaitType::EffectStackAdded, effect_node);
-							}
-						} else if (effect_data.level < level) {
-							auto effect_node = stacking[effect_name].effect_node;
-							active_effects.erase(effect_node);
-							stacking.erase(effect_name);
-							effect_node->queue_delete();
-							add_effect(source, effect, stacks, level, normalised_level);
-						} else {
-							WARN_PRINT("Level of given effect is lower than already existing one.");
-						}
-					} else {
-						add_effect(source, effect, stacks, level, normalised_level);
-					}
-				} else {
-					add_effect(source, effect, stacks, level, normalised_level);
-				}
-
-				// GA-TODO: Distribute effect and/or effect changes to peers.
-			}
-		}
-	}
-}
-
-void GameplayAbilitySystem::server_remove_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && !is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_remove_effect(get_node(source_path), effect, stacks, level);
-	replicate_attributes();
-}
-
-void GameplayAbilitySystem::client_remove_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_remove_effect(get_node(source_path), effect, stacks, level);
-}
-
-void GameplayAbilitySystem::internal_remove_effect(Node *node, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level) {
-	if (auto source = dynamic_cast<GameplayAbilitySystem *>(node)) {
-		GameplayAbilitySystem *aggregate_source = nullptr;
-
-		switch (effect->get_stacking_type()) {
-			case StackingType::AggregateOnSource: {
-				aggregate_source = source;
-			} break;
-			case StackingType::AggregateOnTarget: {
-				aggregate_source = this;
-			} break;
-			default: {
-				for (auto effect_node : active_effects) {
-					if (effect_node->get_effect()->get_effect_name() == effect->get_effect_name()) {
-						active_effects.erase(effect_node);
-						effect_node->queue_delete();
-
-						for (auto ability : active_abilities) {
-							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
-							ability->process_wait(WaitType::EffectRemoved, effect_node);
-						}
-					}
-				}
-
-				return;
-			} break;
-		}
-
-		if (aggregate_source) {
-			auto effect_name = effect->get_effect_name();
-			auto &&stacking = aggregate_source->effect_stacking;
-
-			if (stacking.has(effect_name)) {
-				auto &&effect_data = stacking[effect_name];
-				auto effect_node = effect_data.effect_node;
-
-				if (effect_data.level > level) {
-					if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-						rpc("client_effect_removal_failed", effect);
-					}
-					emit_signal(gameplay_effect_removal_failed, this, effect);
-				} else {
-					effect_node->remove_stack(stacks);
-
-					if (effect_node->get_stacks() <= 0) {
-						for (auto ability : active_abilities) {
-							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
-							ability->process_wait(WaitType::EffectRemoved, effect_node);
-						}
-					} else {
-						for (auto ability : active_abilities) {
-							ability->process_wait(WaitType::EffectStackRemoved, effect_node);
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-void GameplayAbilitySystem::server_remove_effect_node(const NodePath &source_path, Node *effect_node, int64_t stacks, int64_t level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && !is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_remove_effect_node(get_node(source_path), effect_node, stacks, level);
-	replicate_attributes();
-}
-
-void GameplayAbilitySystem::client_remove_effect_node(const NodePath &source_path, Node *effect_node, int64_t stacks, int64_t level) {
-	if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-		ERR_EXPLAIN("Invalid network execution call for multiplayer setup.");
-		ERR_FAIL();
-	}
-	internal_remove_effect_node(get_node(source_path), effect_node, stacks, level);
-}
-
-void GameplayAbilitySystem::internal_remove_effect_node(Node *source, Node *node, int64_t stacks, int64_t level) {
-	if (auto effect_node = dynamic_cast<GameplayEffectNode *>(node)) {
-		auto &&effect = effect_node->get_effect();
-
-		if (effect_node->get_level() > level) {
-			if (get_multiplayer().is_valid() && get_multiplayer()->has_network_peer() && is_network_master()) {
-				rpc("client_effect_removal_failed", effect);
-			}
-			emit_signal(gameplay_effect_removal_failed, this, effect);
-		} else {
-			effect_node->remove_stack(stacks);
-
-			for (auto ability : active_abilities) {
-				ability->process_wait(WaitType::EffectRemoved, effect);
-			}
-		}
-	}
-}
-
-void GameplayAbilitySystem::sync_apply_cue(const String &cue, double level, double magnitude, bool persistent) {
-	if (persistent) {
-		persistent_cues->append(cue);
-	}
-	emit_signal(gameplay_cue_activated, this, cue, level, magnitude, persistent);
-}
-
-void GameplayAbilitySystem::sync_remove_cue(const String &cue) {
-	persistent_cues->remove(cue);
-	emit_signal(gameplay_cue_removed, this, cue);
-}
-
 void GameplayAbilitySystem::add_effect(GameplayAbilitySystem *source, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level) {
 	auto effect_node = memnew(GameplayEffectNode);
 	effect_node->initialise(source, this, effect, level, normalised_level);
@@ -1301,43 +1068,6 @@ void GameplayAbilitySystem::add_effect(GameplayAbilitySystem *source, const Ref<
 	for (auto ability : active_abilities) {
 		ability->process_wait(WaitType::EffectStackAdded, effect_node);
 	}
-}
-
-void GameplayAbilitySystem::replicate_attributes() {
-	rpc("client_update_attributes", attributes->get_attributes());
-}
-
-void GameplayAbilitySystem::client_update_attribute(const Ref<GameplayAttribute> &update) {
-	for (Ref<GameplayAttribute> attribute : attributes->get_attributes()) {
-		if (attribute->get_attribute_name() == update->get_attribute_name()) {
-			attribute->get_attribute_data()->set_base_value(update->get_attribute_data()->get_base_value());
-			attribute->get_attribute_data()->set_current_value(update->get_attribute_data()->get_current_value());
-		}
-	}
-}
-
-void GameplayAbilitySystem::client_ability_activated(Node *ability) {
-	emit_signal(gameplay_ability_activated, this, ability);
-}
-
-void GameplayAbilitySystem::client_ability_blocked(Node *ability) {
-	emit_signal(gameplay_ability_blocked, this, ability);
-}
-
-void GameplayAbilitySystem::client_effect_activated(const Ref<GameplayEffect> &effect) {
-	emit_signal(gameplay_effect_activated, this, effect);
-}
-
-void GameplayAbilitySystem::client_infliction_failed(const Ref<GameplayEffect> &effect) {
-	emit_signal(gameplay_effect_infliction_failed, this, effect);
-}
-
-void GameplayAbilitySystem::client_effect_removal_failed(const Ref<GameplayEffect> &effect) {
-	emit_signal(gameplay_effect_removal_failed, this, effect);
-}
-
-void GameplayAbilitySystem::client_update_attributes(const Array &updates) {
-	// GA-TODO: Replicate server state to client.
 }
 
 double GameplayAbilitySystem::execute_magnitude(double magnitude, double current_value, int operation) {

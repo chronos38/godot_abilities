@@ -188,9 +188,9 @@ public:
 	void remove_ability(Node *ability);
 	void remove_abilities(const Array &abilities);
 	/** Tries to activate ability. */
-	GA_RPC_MASTER void activate_ability(Node *ability);
+	void activate_ability(Node *ability);
 	/** Tries to activate ability. */
-	GA_RPC_MASTER void cancel_ability(Node *ability);
+	void cancel_ability(Node *ability);
 	/** Checks if a single effect is applicable. */
 	bool can_apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1) const;
 	/** Filters effects and returns array of those applicable. */
@@ -198,15 +198,15 @@ public:
 	/** Tries to apply given effect and returns success. */
 	bool try_apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1);
 	/** Adds a single effect from source to this instance. */
-	GA_RPC_MASTER void apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1);
-	GA_RPC_MASTER void apply_effects(Node *source, const Array &effects, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1);
+	void apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1);
+	void apply_effects(Node *source, const Array &effects, int64_t stacks = 1, int64_t level = 1, double normalised_level = 1);
 	/** Adds a single effect from source to this instance. */
-	GA_RPC_MASTER void remove_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1);
-	GA_RPC_MASTER void remove_effect_node(Node *source, Node *effect_node, int64_t stacks = 1, int64_t level = 1);
+	void remove_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks = 1, int64_t level = 1);
+	void remove_effect_node(Node *source, Node *effect_node, int64_t stacks = 1, int64_t level = 1);
 	/** Adds a single cue to this target. */
-	GA_RPC_REMOTESYNC void apply_cue(const String &cue, double level = 1, double magnitude = 0, bool persistent = false);
+	void apply_cue(const String &cue, double level = 1, double magnitude = 0, bool persistent = false);
 	/** Removes a cue from the system. */
-	GA_RPC_REMOTESYNC void remove_cue(const String &cue);
+	void remove_cue(const String &cue);
 
 	/** Gets current stack count of given effect. */
 	int64_t get_stack_count(const Ref<GameplayEffect> &effect) const;
@@ -254,34 +254,7 @@ private:
 	void add_active_ability(GameplayAbility *ability);
 	void remove_active_ability(GameplayAbility *ability);
 
-	void server_activate_ability(const NodePath &ability_path);
-	void client_activate_ability(const NodePath &ability_path);
-	void internal_activate_ability(Node *ability);
-	void server_cancel_ability(const NodePath &ability_path);
-	void client_cancel_ability(const NodePath &ability_path);
-	void internal_cancel_ability(Node *ability);
-	void server_apply_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level);
-	void client_apply_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level);
-	void internal_apply_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level);
-	void server_remove_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level);
-	void client_remove_effect(const NodePath &source_path, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level);
-	void internal_remove_effect(Node *source, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level);
-	void server_remove_effect_node(const NodePath &source_path, Node *effect_node, int64_t stacks, int64_t level);
-	void client_remove_effect_node(const NodePath &source_path, Node *effect_node, int64_t stacks, int64_t level);
-	void internal_remove_effect_node(Node *source, Node *effect_node, int64_t stacks, int64_t level);
-	void sync_apply_cue(const String &cue, double level, double magnitude, bool persistent);
-	void sync_remove_cue(const String &cue);
-
 	void add_effect(GameplayAbilitySystem *source, const Ref<GameplayEffect> &effect, int64_t stacks, int64_t level, double normalised_level);
-	void replicate_attributes();
-
-	GA_RPC_PUPPET void client_update_attribute(const Ref<GameplayAttribute> &update);
-	GA_RPC_PUPPET void client_ability_activated(Node *ability);
-	GA_RPC_PUPPET void client_ability_blocked(Node *ability);
-	GA_RPC_PUPPET void client_effect_activated(const Ref<GameplayEffect> &effect);
-	GA_RPC_PUPPET void client_infliction_failed(const Ref<GameplayEffect> &effect);
-	GA_RPC_PUPPET void client_effect_removal_failed(const Ref<GameplayEffect> &effect);
-	GA_RPC_PUPPET void client_update_attributes(const Array &updates);
 
 	static double execute_magnitude(double magnitude, double current_value, int operation);
 	static void _bind_methods();
